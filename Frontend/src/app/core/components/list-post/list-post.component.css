@@ -1,0 +1,57 @@
+body {
+    background-color: #fff;
+    font-family: 'Arial', sans-serif;
+}
+
+.card {
+    border-radius: 1rem;
+    border: none;
+    padding: 2rem;
+    background: #ffffff;
+}
+
+h2 {
+    font-size: 2rem;
+    font-weight: bold;
+    margin-bottom: 1.5rem;
+}
+
+.form-label {
+    font-weight: 500;
+}
+
+.form-control {
+    border-radius: 0.5rem;
+    padding: 0.75rem;
+}
+
+.rating {
+    font-size: 2rem;
+    display: flex;
+    gap: 5px;
+}
+
+.star {
+    cursor: pointer;
+    transition: color 0.2s;
+    color: #e0e0e0; /* Default color for empty stars */
+}
+
+.star.filled,
+.star:hover,
+.star:hover ~ .star {
+    color: #ffc107; /* Filled star color */
+}
+
+.btn-primary {
+    background-color: #007bff;
+    border-color: #007bff;
+    font-weight: bold;
+    border-radius: 0.5rem;
+    padding: 0.75rem;
+}
+
+.btn-primary:hover {
+    background-color: #0056b3;
+    border-color: #004085;
+}

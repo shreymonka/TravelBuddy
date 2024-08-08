@@ -1,0 +1,398 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: CloudFormation template for Travel Companion project infrastructure.
+
+Parameters:
+  EnvironmentName:
+    Description: Travel Companion
+    Type: String
+    Default: TravelCompanion
+
+  VpcCIDR:
+    Description: IP range (CIDR notation) for this VPC
+    Type: String
+    Default: 10.0.0.0/16
+
+  PublicSubnetCIDR:
+    Description: IP range (CIDR notation) for the public subnet in the first Availability Zone
+    Type: String
+    Default: 10.0.1.0/24
+
+  PrivateSubnetCIDR:
+    Description: IP range (CIDR notation) for the private subnet in the second Availability Zone
+    Type: String
+    Default: 10.0.2.0/24
+
+  RDSUsername:
+    Description: Database admin username
+    Type: String
+    Default: TravelCompanionRDS
+
+  RDSPassword:
+    Description: Database admin password
+    Type: String
+    Default: Shrey2691
+    NoEcho: true
+    ### Not recommended to use NoEcho for password check docs once
+
+  RDSAllocatedStorage:
+    Description: RDS Database storage
+    Type: Number
+    Default: '20'
+
+  KeyName:
+    Description: Name of an existing EC2 KeyPair to enable SSH access to the instances
+    Type: AWS::EC2::KeyPair::KeyName
+    Default: eks-key-pair
+
+Resources:
+  ### VPC and Networking ###
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VpcCIDR
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Ref EnvironmentName
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    DependsOn: VPC
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Ref EnvironmentName
+
+  InternetGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      InternetGatewayId: !Ref InternetGateway
+      VpcId: !Ref VPC
+
+  PublicSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [ 0, !GetAZs '' ]
+      CidrBlock: !Ref PublicSubnetCIDR
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName} Public Subnet
+
+  PrivateSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [ 1, !GetAZs  '' ]
+      CidrBlock: !Ref PrivateSubnetCIDR
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName} Private Subnet
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName} Public Routes
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: InternetGatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  SubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet
+      RouteTableId: !Ref PublicRouteTable
+
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName} Private Routes
+
+  PrivateRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PrivateSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet
+      RouteTableId: !Ref PrivateRouteTable
+
+  DBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: "Subnet group for RDS instances"
+      SubnetIds:
+        - !Ref PublicSubnet
+        - !Ref PrivateSubnet
+      DBSubnetGroupName: !Sub "${EnvironmentName}-db-subnet-group"
+
+  ### RDS Instance ###
+  RDSInstance:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      AllocatedStorage: '20'
+      DBInstanceClass: db.t3.micro
+      Engine: mysql
+      EngineVersion: '8.0.35'
+      MasterUsername: !Ref RDSUsername
+      MasterUserPassword: !Ref RDSPassword
+      VPCSecurityGroups: [!GetAtt MyDBSecurityGroup.GroupId]
+      DBSubnetGroupName: !Ref DBSubnetGroup
+      PubliclyAccessible: true
+
+  EC2InstanceFront:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: ami-0ae8f15ae66fe8cda
+      InstanceType: t3.small
+      KeyName: !Ref KeyName
+      SubnetId: !Ref PublicSubnet
+      SecurityGroupIds:
+        - !Ref EC2SecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-EC2-Instance-Frontend
+
+  EC2InstanceBack:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: ami-0ae8f15ae66fe8cda
+      InstanceType: t3.small
+      KeyName: !Ref KeyName
+      SubnetId: !Ref PublicSubnet
+      SecurityGroupIds:
+        - !Ref EC2SecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-EC2-Instance-Backend
+
+  ### EC2 Security Group ###
+  EC2SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for EC2 cluster
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+          Description: Allow HTTPS traffic for Ec2
+        - IpProtocol: tcp
+          FromPort: 10250
+          ToPort: 10255
+          CidrIp: 0.0.0.0/0
+          Description: Allow traffic for Kubelet and other node services
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+          Description: Allow HTTP traffic if needed for the services
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+          Description: Allow SSH access
+      SecurityGroupEgress:
+        - IpProtocol: '-1'
+          CidrIp: 0.0.0.0/0
+          Description: Allow all outbound traffic
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-EC2-SG
+
+  MyDBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Enable access to the MySQL RDS instance
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 3306
+          ToPort: 3306
+          CidrIp: 10.0.0.0/16
+
+  ### Lambda Function ###
+  LambdaFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Handler: index.lambda_handler
+      Role: arn:aws:iam::896693697265:role/LabRole
+      Code:
+        ZipFile: |
+          import pymysql
+          import boto3
+          import os
+          import logging
+
+          # Set up logging
+          logger = logging.getLogger()
+          logger.setLevel(logging.INFO)
+
+          # SNS settings from environment variables
+          sns_topic_arn = os.environ['SNS_TOPIC_ARN']
+
+          def lambda_handler(event, context):
+              logger.info('Event: %s', event)
+
+              # Extract email from the event payload
+              user_email = event.get('email')
+              if not user_email:
+                  logger.error('Email not provided in the event')
+                  return {
+                      'statusCode': 400,
+                      'body': 'Email not provided'
+                  }
+
+              try:
+                  # Send welcome email using SNS
+                  sns_client = boto3.client('sns')
+                  response = sns_client.publish(
+                      TopicArn=sns_topic_arn,
+                      Message='Welcome to our service!',
+                      Subject='Welcome',
+                      MessageStructure='string',
+                      MessageAttributes={
+                          'email': {
+                              'DataType': 'String',
+                              'StringValue': user_email
+                          }
+                      }
+                  )
+          
+                  logger.info('SNS Response: %s', response)
+          
+                  return {
+                      'statusCode': 200,
+                      'body': 'Welcome email sent successfully'
+                  }
+              except Exception as e:
+                  logger.error('Error: %s', e)
+                  return {
+                      'statusCode': 500,
+                      'body': 'Internal server error'
+      Runtime: python3.8
+      Timeout: 30
+      Environment:
+        Variables:
+          SNS_TOPIC_ARN: !Ref SNSTopic
+
+  ### SNS Topic ###
+  SNSTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub ${EnvironmentName}-sns-topic
+
+  ### API Gateway ###
+  ApiGatewayRestApi:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: !Sub "${EnvironmentName} API"
+      Description: API Gateway for the Travel Companion project
+
+  ApiGatewayResourceApi:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      ParentId: !GetAtt ApiGatewayRestApi.RootResourceId
+      PathPart: "api"
+      RestApiId: !Ref ApiGatewayRestApi
+
+  ApiGatewayResourceAuth:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      ParentId: !Ref ApiGatewayResourceApi
+      PathPart: "auth"
+      RestApiId: !Ref ApiGatewayRestApi
+
+  ApiGatewayResourceSendMail:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      ParentId: !Ref ApiGatewayResourceApi
+      PathPart: "send-mail"
+      RestApiId: !Ref ApiGatewayRestApi
+
+  ApiGatewayMethodSendMailPost:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      AuthorizationType: "NONE"
+      HttpMethod: "POST"
+      ResourceId: !Ref ApiGatewayResourceSendMail
+      RestApiId: !Ref ApiGatewayRestApi
+      Integration:
+        Type: "AWS_PROXY"
+        IntegrationHttpMethod: "POST"
+        Uri: !Sub
+          - arn:aws:apigateway:${Region}:lambda:path/2015-03-31/functions/${LambdaArn}/invocations
+          - Region: !Ref "AWS::Region"
+            LambdaArn: !GetAtt LambdaFunction.Arn
+      MethodResponses:
+        - StatusCode: "200"
+        - StatusCode: "400"
+        - StatusCode: "500"
+
+  ### API Gateway Deployment ###
+  ApiGatewayDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn: ApiGatewayMethodSendMailPost
+    Properties:
+      RestApiId: !Ref ApiGatewayRestApi
+      StageName: prod
+
+  ### Lambda Permission for API Gateway ###
+  LambdaPermissionApiGateway:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref LambdaFunction
+      Action: "lambda:InvokeFunction"
+      Principal: "apigateway.amazonaws.com"
+      SourceArn: !Sub
+        - arn:aws:execute-api:${Region}:${AccountId}:${ApiId}/*
+        - Region: !Ref "AWS::Region"
+          AccountId: !Ref "AWS::AccountId"
+          ApiId: !Ref ApiGatewayRestApi
+Outputs:
+  VPCId:
+    Value: !Ref VPC
+    Description: The ID of the VPC
+
+  PublicSubnetId:
+    Value: !Ref PublicSubnet
+    Description: The ID of the Public Subnet
+
+  PrivateSubnetId:
+    Value: !Ref PrivateSubnet
+    Description: The ID of the Private Subnet
+
+  RDSInstanceEndpoint:
+    Value: !GetAtt RDSInstance.Endpoint.Address
+    Description: Endpoint of the RDS instance
+
+  LambdaFunctionName:
+    Value: !Ref LambdaFunction
+    Description: The name of the Lambda function
+
+  SNSTopicArn:
+    Value: !Ref SNSTopic
+    Description: The ARN of the SNS topic
+
+  ApiGatewayUrl:
+    Description: "API Gateway URL"
+    Value: !Sub "https://${ApiGatewayRestApi}.execute-api.${AWS::Region}.amazonaws.com/prod/"
